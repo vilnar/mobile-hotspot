@@ -43,6 +43,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+	 <Compile Include="DotEnv.cs" />
     <Compile Include="ClientComparer.cs" />
     <Compile Include="HotspotManager.cs" />
     <Compile Include="IHotspotManager.cs" />

@@ -1,4 +1,6 @@
-﻿using System;
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Windows.Networking.NetworkOperators;
@@ -7,17 +9,53 @@ namespace MobileHotspot
 {
     class Program
     {
+        private static bool isclosing = false;
+        private static CancellationTokenSource cancellationTokenSource;
+        private static Task hotspotTask;
+
+
+        [DllImport("Kernel32")]
+        private static extern bool SetConsoleCtrlHandler(SetConsoleCtrlEventHandler handler, bool add);
+
+        private delegate bool SetConsoleCtrlEventHandler(CtrlType sig);
+
+        private enum CtrlType
+        {
+            CTRL_C_EVENT = 0,
+            CTRL_BREAK_EVENT = 1,
+            CTRL_CLOSE_EVENT = 2,
+            CTRL_LOGOFF_EVENT = 5,
+            CTRL_SHUTDOWN_EVENT = 6
+        }
+
         static async Task Main(string[] args)
         {
-            if (args.Length != 2)
-            {
-                Console.WriteLine("usage: mobilehotspot.exe SSID PASSPHRASE");
+            var root = Directory.GetCurrentDirectory();
+            var isOk = DotEnv.Load(Path.Combine(root, ".env"));
+            if (!isOk) {
+                Console.ReadLine();
                 return;
             }
 
-            var cancellationTokenSource = new CancellationTokenSource();
+            string ssid = Environment.GetEnvironmentVariable("SSID");
+            if (string.IsNullOrEmpty(ssid) || ssid.Length < 2)
+            {
+                Console.Error.WriteLine("wrong env SSID");
+                Console.ReadLine();
+                return;
+            }
+            string passphrase = Environment.GetEnvironmentVariable("PASSPHRASE");
+            if (string.IsNullOrEmpty(passphrase) || passphrase.Length < 2)
+            {
+                Console.Error.WriteLine("wrong env PASSPHRASE");
+                Console.ReadLine();
+                return;
+            }
 
-            var hotspot = await HotspotManager.CreateAsync(args[0], args[1]);
+            Console.WriteLine("wifi: " + ssid);
+            Console.WriteLine("password: " + passphrase + "\n\n");
+
+            var hotspot = await HotspotManager.CreateAsync(ssid, passphrase);
 
             hotspot.ClientConnected += (_, clientInfo) =>
             {
@@ -28,22 +66,39 @@ namespace MobileHotspot
                 Console.WriteLine($"DIS | {ToString(clientInfo)}");
             };
 
-            Console.Error.WriteLine("Starting hotspot ... press \"q\" and Enter to quit");
+            Console.WriteLine("Starting hotspot ... press \"ctrl+c\" to exit");
 
-            var hotspotTask = hotspot.RunAsync(cancellationTokenSource.Token);
+            cancellationTokenSource = new CancellationTokenSource();
+            hotspotTask = hotspot.RunAsync(cancellationTokenSource.Token);
+            SetConsoleCtrlHandler(Handler, true);
 
-            // wait for 'q'
-            while (Convert.ToChar(Console.Read()) != 'q') ;
-
-            Console.Error.WriteLine("Stopping hotspot ...");
-            cancellationTokenSource.Cancel();
-            hotspotTask.GetAwaiter().GetResult();
+            while (!isclosing) ;
         }
 
         private static string ToString(NetworkOperatorTetheringClient client)
         {
             string hostNames = string.Join(" | ", client.HostNames);
             return $"{client.MacAddress} | {hostNames}";
+        }
+
+        private static bool Handler(CtrlType signal)
+        {
+            switch (signal)
+            {
+                case CtrlType.CTRL_BREAK_EVENT:
+                case CtrlType.CTRL_C_EVENT:
+                case CtrlType.CTRL_LOGOFF_EVENT:
+                case CtrlType.CTRL_SHUTDOWN_EVENT:
+                case CtrlType.CTRL_CLOSE_EVENT:
+                    Console.WriteLine("Stopping hotspot ...");
+                    cancellationTokenSource.Cancel();
+                    hotspotTask.GetAwaiter().GetResult();
+                    isclosing = true;
+                    return false;
+
+                default:
+                    return false;
+            }
         }
     }
 }
